@@ -1,0 +1,19 @@
+{
+  "id": "jots-media-tracker",
+  "name": "Media Tracker",
+  "version": "1.0.0",
+  "description": "Tracks TV and movie viewing using the SIMKL API.",
+  "author": "Joseph Fieber",
+  "main": "src/main.ts",
+  "minAppVersion": "0.9.7",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "dependencies": {
+    "axios": "^0.21.1"
+  },
+  "devDependencies": {
+    "typescript": "^4.1.2"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "jots-media-tracker",
+  "version": "1.0.0",
+  "description": "Tracks TV and movie viewing using the SIMKL API.",
+  "main": "dist/main.js",
+  "type": "module",
+  "scripts": {
+    "build": "npm run clean && rollup -c rollup.config.js",
+    "dev": "rollup -c rollup.config.js -w",
+    "clean": "rimraf dist",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "simkl",
+    "tv",
+    "movies"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^0.21.1"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.3",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-typescript": "^12.1.2",
+    "@types/node": "^22.15.18",
+    "obsidian": "^1.8.7",
+    "rimraf": "^6.0.1",
+    "tslib": "^2.8.1",
+    "typescript": "^4.9.5"
+  }
+}
