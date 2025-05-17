@@ -4,12 +4,7 @@ const API_URL = 'https://api.simkl.com';
 const AUTH_URL = 'https://simkl.com/oauth/authorize';
 const TOKEN_URL = 'https://api.simkl.com/oauth/token';
 
-interface TokenResponse {
-    access_token: string;
-    token_type: string;
-    expires_in: number;
-    refresh_token?: string;
-}
+import { TokenResponse } from './types';
 
 export class SimklAPI {
     private clientId: string;
@@ -29,7 +24,7 @@ export class SimklAPI {
             client_id: this.clientId,
             scope: 'history',
             state: Math.random().toString(36).substring(7),
-            redirect_uri: 'http://localhost:8080/callback'
+            redirect_uri: 'obsidian://jots-media-tracker-auth-callback'
         });
         return `${AUTH_URL}?${params}`;
     }
@@ -40,7 +35,7 @@ export class SimklAPI {
             code,
             client_id: this.clientId,
             client_secret: this.clientSecret,
-            redirect_uri: 'http://localhost:8080/callback'
+            redirect_uri: 'obsidian://jots-media-tracker-auth-callback'
         };
 
         const response = await fetch(TOKEN_URL, {

@@ -1,24 +1,50 @@
 // This is the entry point of the plugin. It initializes the plugin, sets up commands, and handles the integration with Obsidian.
 
-import { Plugin } from 'obsidian';
+import { Plugin, Notice } from 'obsidian';
 import { Settings, DEFAULT_SETTINGS, PluginSettings, SettingsTab } from './settings';
 import { SimklAPI } from './api/simkl';
+import { TraktAPI } from './api/trakt';
 import { SimklHistoryItem, SimklResponse } from './api/types';
 
-export default class ObsidianSimklPlugin extends Plugin {
+export default class MediaTrackerPlugin extends Plugin {
     settings!: Settings;
-    private simklAPI!: SimklAPI;
+    private simklAPI?: SimklAPI;
+    private traktAPI?: TraktAPI;
 
     async onload() {
         await this.loadSettings();
         const settings = this.settings.getSettings();
-        if (settings.clientId && settings.clientSecret) {
-            this.simklAPI = new SimklAPI(settings.clientId, settings.clientSecret);
-            if (settings.accessToken) {
+
+        // Register our custom URI protocol
+        this.registerObsidianProtocolHandler("jots-media-tracker-auth-callback", async (params) => {
+            // The auth code will be in params.code
+            if (params.code) {
+                // Dispatch custom event that our settings tab will listen for
+                const event = new CustomEvent('jots-media-tracker:auth-code', {
+                    detail: { code: params.code }
+                });
+                window.dispatchEvent(event);
+            }
+        });
+
+        if (settings.simkl.enabled && settings.simkl.clientId && settings.simkl.clientSecret) {
+            this.simklAPI = new SimklAPI(settings.simkl.clientId, settings.simkl.clientSecret);
+            if (settings.simkl.accessToken) {
                 this.simklAPI.setTokens(
-                    settings.accessToken,
-                    settings.refreshToken,
-                    settings.tokenExpiresAt ? Math.floor((settings.tokenExpiresAt - Date.now()) / 1000) : null
+                    settings.simkl.accessToken,
+                    settings.simkl.refreshToken,
+                    settings.simkl.tokenExpiresAt ? Math.floor((settings.simkl.tokenExpiresAt - Date.now()) / 1000) : null
+                );
+            }
+        }
+
+        if (settings.trakt.enabled && settings.trakt.clientId && settings.trakt.clientSecret) {
+            this.traktAPI = new TraktAPI(settings.trakt.clientId, settings.trakt.clientSecret);
+            if (settings.trakt.accessToken) {
+                this.traktAPI.setTokens(
+                    settings.trakt.accessToken,
+                    settings.trakt.refreshToken,
+                    settings.trakt.tokenExpiresAt ? Math.floor((settings.trakt.tokenExpiresAt - Date.now()) / 1000) : null
                 );
             }
         }
@@ -33,41 +59,86 @@ export default class ObsidianSimklPlugin extends Plugin {
         this.addSettingTab(new SettingsTab(this.app, this));
     }
 
-    private getYesterdayDateString(): string {
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        return yesterday.toISOString().split('T')[0];
+    private getYesterdayDateRange(): { startDate: string, endDate: string } {
+        const now = new Date();
+        const yesterday = new Date(now);
+        yesterday.setDate(now.getDate() - 1);
+
+        // Start of yesterday in local time
+        const start = new Date(yesterday);
+        start.setHours(0, 0, 0, 0);
+
+        // End of yesterday in local time
+        const end = new Date(yesterday);
+        end.setHours(23, 59, 59, 999);
+
+        return {
+            startDate: start.toISOString(),
+            endDate: end.toISOString()
+        };
+    }
+
+    private async getActiveAPI() {
+        const settings = this.settings.getSettings();
+        const service = settings.primaryService;
+
+        if (!service) {
+            throw new Error('Please select a primary service in settings');
+        }
+
+        const serviceSettings = settings[service];
+        if (!serviceSettings.enabled) {
+            throw new Error(`${service.toUpperCase()} is not enabled`);
+        }
+
+        if (!serviceSettings.clientId || !serviceSettings.clientSecret) {
+            throw new Error(`Please configure your ${service.toUpperCase()} credentials in settings`);
+        }
+
+        if (service === 'simkl') {
+            if (!this.simklAPI) {
+                this.simklAPI = new SimklAPI(serviceSettings.clientId, serviceSettings.clientSecret);
+                if (serviceSettings.accessToken) {
+                    this.simklAPI.setTokens(
+                        serviceSettings.accessToken,
+                        serviceSettings.refreshToken,
+                        serviceSettings.tokenExpiresAt ? Math.floor((serviceSettings.tokenExpiresAt - Date.now()) / 1000) : null
+                    );
+                }
+            }
+            return this.simklAPI;
+        } else if (service === 'trakt') {
+            if (!this.traktAPI) {
+                this.traktAPI = new TraktAPI(serviceSettings.clientId, serviceSettings.clientSecret);
+                if (serviceSettings.accessToken) {
+                    this.traktAPI.setTokens(
+                        serviceSettings.accessToken,
+                        serviceSettings.refreshToken,
+                        serviceSettings.tokenExpiresAt ? Math.floor((serviceSettings.tokenExpiresAt - Date.now()) / 1000) : null
+                    );
+                }
+            }
+            return this.traktAPI;
+        }
+
+        throw new Error(`Unknown service: ${service}`);
     }
 
     async trackViewing() {
         try {
-            const settings = this.settings.getSettings();
-            if (!settings.clientId) {
-                console.error('Please configure your SIMKL Client ID in the settings');
-                return;
-            }
+            const api = await this.getActiveAPI();
+            const { startDate, endDate } = this.getYesterdayDateRange();
+            console.debug('Fetching viewing info for range:', { startDate, endDate });
 
-            // Re-initialize API if needed
-            if (!this.simklAPI) {
-                this.simklAPI = new SimklAPI(settings.clientId, settings.clientSecret);
-                if (settings.accessToken) {
-                    this.simklAPI.setTokens(
-                        settings.accessToken,
-                        settings.refreshToken,
-                        settings.tokenExpiresAt ? Math.floor((settings.tokenExpiresAt - Date.now()) / 1000) : null
-                    );
-                }
-            }
-
-            const yesterday = this.getYesterdayDateString();
-            const viewingData = await this.simklAPI.fetchViewingInfo(yesterday, yesterday);
+            const viewingData = await api.fetchViewingInfo(startDate, endDate);
 
             if (!viewingData?.items?.length) {
-                console.log('No media watched yesterday');
+                new Notice('No media watched yesterday');
                 return;
             }
 
-            console.log('Views from yesterday:', yesterday);
+            new Notice(`Found ${viewingData.items.length} items watched yesterday`);
+            console.log('Views from yesterday:', { startDate, endDate });
             viewingData.items.forEach((item: SimklHistoryItem) => {
                 const watchedAt = new Date(item.watched_at).toLocaleString();
                 if (item.type === 'movie' && item.movie) {
@@ -79,6 +150,7 @@ export default class ObsidianSimklPlugin extends Plugin {
         } catch (error) {
             console.error('Error tracking viewing:', error);
             if (error instanceof Error) {
+                new Notice(`Error: ${error.message}`);
                 console.error('Error details:', error.message);
             }
         }
@@ -98,13 +170,24 @@ export default class ObsidianSimklPlugin extends Plugin {
         await this.saveData(settings);
 
         // Re-initialize API if credentials changed
-        if (settings.clientId && settings.clientSecret) {
-            this.simklAPI = new SimklAPI(settings.clientId, settings.clientSecret);
-            if (settings.accessToken) {
+        if (settings.simkl.enabled && settings.simkl.clientId && settings.simkl.clientSecret) {
+            this.simklAPI = new SimklAPI(settings.simkl.clientId, settings.simkl.clientSecret);
+            if (settings.simkl.accessToken) {
                 this.simklAPI.setTokens(
-                    settings.accessToken,
-                    settings.refreshToken,
-                    settings.tokenExpiresAt ? Math.floor((settings.tokenExpiresAt - Date.now()) / 1000) : null
+                    settings.simkl.accessToken,
+                    settings.simkl.refreshToken,
+                    settings.simkl.tokenExpiresAt ? Math.floor((settings.simkl.tokenExpiresAt - Date.now()) / 1000) : null
+                );
+            }
+        }
+
+        if (settings.trakt.enabled && settings.trakt.clientId && settings.trakt.clientSecret) {
+            this.traktAPI = new TraktAPI(settings.trakt.clientId, settings.trakt.clientSecret);
+            if (settings.trakt.accessToken) {
+                this.traktAPI.setTokens(
+                    settings.trakt.accessToken,
+                    settings.trakt.refreshToken,
+                    settings.trakt.tokenExpiresAt ? Math.floor((settings.trakt.tokenExpiresAt - Date.now()) / 1000) : null
                 );
             }
         }
@@ -112,6 +195,7 @@ export default class ObsidianSimklPlugin extends Plugin {
 
     onunload() {
         // Clean up any resources
-        this.simklAPI = undefined as any;
+        this.simklAPI = undefined;
+        this.traktAPI = undefined;
     }
 }

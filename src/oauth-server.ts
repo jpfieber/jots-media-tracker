@@ -1,82 +1,38 @@
-import { IncomingMessage, ServerResponse, createServer, Server } from 'http';
-import { URL } from 'url';
-import { Notice } from 'obsidian';
-import { SimklAPI } from './api/simkl';
+import { requestUrl, Notice } from 'obsidian';
 
 export interface OAuthResult {
     success: boolean;
     error?: string;
     code?: string;
+    data?: any;
 }
 
-export class OAuthServer {
-    private server: Server;
-    private resolveCallback?: (result: OAuthResult) => void;
-
-    constructor() {
-        this.server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-            if (!req.url) {
-                res.writeHead(400);
-                res.end('Invalid request');
-                return;
-            }
-
-            const url = new URL(req.url, 'http://localhost:8080');
-            const code = url.searchParams.get('code');
-            const error = url.searchParams.get('error');
-
-            // Send a response that closes the window
-            res.writeHead(200, { 'Content-Type': 'text/html' });
-            res.end(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Authentication Complete</title>
-                    <style>
-                        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; text-align: center; padding: 20px; }
-                        .message { margin: 20px 0; }
-                    </style>
-                </head>
-                <body>
-                    <h2>Authentication ${error ? 'Failed' : 'Successful'}</h2>
-                    <div class="message">${error ? 'Please try again.' : 'You can close this window now.'}</div>
-                    <script>
-                        setTimeout(() => window.close(), 3000);
-                    </script>
-                </body>
-                </html>
-            `);
-
-            if (this.resolveCallback) {
-                this.resolveCallback({
-                    success: !error,
-                    error: error || undefined,
-                    code: code || undefined
-                });
-                this.resolveCallback = undefined;
-            }
-        });
-    }
-
-    start(): Promise<void> {
-        return new Promise((resolve, reject) => {
-            this.server.listen(8080, 'localhost', () => {
-                resolve();
-            }).on('error', (err: Error) => {
-                reject(err);
+export class OAuthHandler {
+    async exchangeCodeForToken(tokenUrl: string, params: Record<string, string>): Promise<OAuthResult> {
+        try {
+            const response = await requestUrl({
+                url: tokenUrl,
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(params)
             });
-        });
-    }
 
-    stop(): Promise<void> {
-        return new Promise((resolve) => {
-            this.server.close(() => resolve());
-        });
-    }
+            if (response.status !== 200) {
+                throw new Error(`Failed to exchange code for token: ${response.status}, details: ${response.text}`);
+            }
 
-    waitForCallback(): Promise<OAuthResult> {
-        return new Promise((resolve) => {
-            this.resolveCallback = resolve;
-        });
+            return {
+                success: true,
+                data: response.json
+            };
+        } catch (error) {
+            console.error('Token exchange failed:', error);
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : 'Unknown error during token exchange'
+            };
+        }
     }
 }
