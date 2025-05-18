@@ -157,144 +157,218 @@ export class SimklAPI {
     async fetchViewingInfo(startDate: string, endDate: string): Promise<SimklResponse> {
         await this.ensureValidToken();
 
-        const params = new URLSearchParams({
-            date_from: startDate,
-            date_to: endDate,
-            extended: 'full'
-        });
-
-        const response = await fetch(`${API_URL}/sync/history?${params}`, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${this.accessToken}`,
-                'simkl-api-key': this.clientId,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('SIMKL API Error Response:', {
-                status: response.status,
-                headers: response.headers,
-                body: errorText
-            });
-            throw new Error(`HTTP error! status: ${response.status}, details: ${errorText}`);
-        }
-
-        const data = await response.json();
-        console.debug('SIMKL API Response Details:', {
-            rawResponse: data,
-            status: response.status,
-            headers: response.headers,
-            responseSize: JSON.stringify(data).length,
-            hasItems: Array.isArray(data) ? data.length : 0,
-            firstItem: Array.isArray(data) && data.length > 0 ? data[0] : null
-        });
-
         try {
-            // Check if we got an array directly or if it's wrapped in a response object
-            const items = Array.isArray(data) ? data : data.items || [];
+            // Validate and normalize date inputs
+            const startDateTime = new Date(startDate);
+            const endDateTime = new Date(endDate);
 
-            return {
-                items: items.map((item: any): SimklHistoryItem => {
-                    if (!item.watched_at) {
-                        console.warn('Item missing watched_at:', item);
-                        throw new Error('Invalid item format: missing watched_at timestamp');
-                    }
+            if (isNaN(startDateTime.getTime()) || isNaN(endDateTime.getTime())) {
+                throw new Error('Invalid date format. Please use ISO 8601 format (YYYY-MM-DDTHH:mm:ss.sssZ)');
+            }
 
-                    // Extract runtime to calculate start time
-                    let runtime = 0;
-                    if (item.movie && item.movie.runtime) {
-                        runtime = item.movie.runtime;
-                    } else if (item.episode && item.episode.runtime) {
-                        runtime = item.episode.runtime;
-                    } else if (item.show && item.show.runtime) {
-                        runtime = item.show.runtime;
-                    }
+            if (startDateTime > endDateTime) {
+                throw new Error('Start date must be before end date');
+            }
 
-                    const watchedAt = new Date(item.watched_at);
-                    const startedAt = new Date(watchedAt.getTime() - runtime * 60 * 1000);
+            // Convert to UTC timestamps for consistent comparison
+            const startTimestamp = startDateTime.getTime();
+            const endTimestamp = endDateTime.getTime();
 
-                    const result: SimklHistoryItem = {
-                        watched_at: item.watched_at,
-                        started_at: startedAt.toISOString(),
-                        type: item.movie ? 'movie' : 'show'
-                    };
+            const params = new URLSearchParams({
+                from: startDateTime.toISOString(),
+                to: endDateTime.toISOString(),
+                extended: 'full'
+            });
 
-                    if (item.movie) {
-                        result.movie = {
-                            title: item.movie.title,
-                            year: item.movie.year,
-                            runtime: item.movie.runtime,
-                            ids: {
-                                simkl: item.movie.ids?.simkl || 0,
-                                slug: item.movie.ids?.slug || '',
-                                imdb: item.movie.ids?.imdb,
-                                tmdb: item.movie.ids?.tmdb
-                            }
-                        };
-                    } else if (item.show) {
-                        result.show = {
-                            title: item.show.title,
-                            year: item.show.year,
-                            runtime: item.show.runtime,
-                            ids: {
-                                simkl: item.show.ids?.simkl || 0,
-                                slug: item.show.ids?.slug || '',
-                                tvdb: item.show.ids?.tvdb,
-                                imdb: item.show.ids?.imdb,
-                                tmdb: item.show.ids?.tmdb
-                            }
-                        };
+            const url = `${API_URL}/sync/all-items/history?${params}`;
 
-                        if (item.episode) {
-                            result.episode = {
-                                title: item.episode.title,
-                                season: item.episode.season,
-                                episode: item.episode.number,
-                                runtime: item.episode.runtime,
-                                ids: {
-                                    tvdb: item.episode.ids?.tvdb,
-                                    imdb: item.episode.ids?.imdb,
-                                    tmdb: item.episode.ids?.tmdb
+            const response = await requestUrl({
+                url,
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${this.accessToken}`,
+                    'simkl-api-key': this.clientId,
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (response.status !== 200) {
+                const error = `SIMKL API error: ${response.status} - ${response.text}`;
+                throw new Error(error);
+            }
+
+            const data = response.json;
+
+            const items: SimklHistoryItem[] = [];
+
+            // Process movies
+            if (data.movies && Array.isArray(data.movies)) {
+                const movieItems = data.movies
+                    .filter((item: Record<string, any>) => {
+                        const watchedAt = new Date(item.watched_at || item.last_watched_at);
+                        if (isNaN(watchedAt.getTime())) {
+                            console.debug('Invalid watched_at date for movie item:', item);
+                            return false;
+                        }
+                        const timestamp = watchedAt.getTime();
+                        return timestamp >= startTimestamp && timestamp <= endTimestamp;
+                    })
+                    .map((item: Record<string, any>): SimklHistoryItem | null => {
+                        const watched_at = item.watched_at || item.last_watched_at;
+                        if (!watched_at) {
+                            console.debug('Movie item missing watched_at:', item);
+                            return null;
+                        }
+
+                        const movieData = item.movie || item;
+                        if (!movieData.title) {
+                            console.debug('Movie data missing title:', item);
+                            return null;
+                        }
+
+                        try {
+                            const runtime = movieData.runtime || 0;
+                            const watchedAt = new Date(watched_at);
+                            const startedAt = new Date(watchedAt.getTime() - runtime * 60 * 1000);
+
+                            return {
+                                watched_at,
+                                started_at: startedAt.toISOString(),
+                                type: 'movie',
+                                movie: {
+                                    title: movieData.title,
+                                    year: movieData.year,
+                                    runtime: movieData.runtime,
+                                    ids: {
+                                        simkl: movieData.ids?.simkl || 0,
+                                        slug: movieData.ids?.slug || '',
+                                        imdb: movieData.ids?.imdb,
+                                        tmdb: movieData.ids?.tmdb
+                                    }
                                 }
                             };
+                        } catch (error) {
+                            console.warn('Error processing movie item:', error, item);
+                            return null;
                         }
-                    }
+                    })
+                    .filter((item: SimklHistoryItem | null): item is SimklHistoryItem => item !== null);
 
-                    return result;
-                })
-            };
-        } catch (error: unknown) {
-            console.error('Failed to parse SIMKL response:', error);
-            console.error('Raw response:', data);
-            const message = error instanceof Error ? error.message : 'Unknown error parsing response';
-            throw new Error(`Failed to parse SIMKL response: ${message}`);
+                items.push(...movieItems);
+            }
+
+            // Process shows
+            if (data.shows && Array.isArray(data.shows)) {
+                const showItems = data.shows
+                    .filter((item: Record<string, any>) => {
+                        const watchedAt = new Date(item.watched_at || item.last_watched_at);
+                        if (isNaN(watchedAt.getTime())) {
+                            console.debug('Invalid watched_at date for show item:', item);
+                            return false;
+                        }
+                        const timestamp = watchedAt.getTime();
+                        return timestamp >= startTimestamp && timestamp <= endTimestamp;
+                    })
+                    .map((item: Record<string, any>): SimklHistoryItem | null => {
+                        const watched_at = item.watched_at || item.last_watched_at;
+                        if (!watched_at) {
+                            console.debug('Show item missing watched_at:', item);
+                            return null;
+                        }
+
+                        const showData = item.show || item;
+                        if (!showData.title) {
+                            console.debug('Show data missing title:', item);
+                            return null;
+                        }
+
+                        try {
+                            // If episode data is not directly available, try to parse from last_watched field
+                            let finalEpisodeData = item.episode;
+                            if (!finalEpisodeData && item.last_watched) {
+                                const match = item.last_watched.match(/S(\d+)E(\d+)/);
+                                if (match) {
+                                    finalEpisodeData = {
+                                        title: "", // Title not available from last_watched
+                                        season: parseInt(match[1], 10),
+                                        episode: parseInt(match[2], 10),
+                                        runtime: showData.runtime // Use show runtime as fallback
+                                    };
+                                }
+                            }
+
+                            if (!finalEpisodeData) {
+                                // Skip this item - no episode data available
+                                console.debug('Skipping show item - no episode data available:', item);
+                                return null;
+                            }
+
+                            const runtime = finalEpisodeData.runtime || showData.runtime || 0;
+                            const watchedAt = new Date(watched_at);
+                            const startedAt = new Date(watchedAt.getTime() - runtime * 60 * 1000);
+
+                            return {
+                                watched_at,
+                                started_at: startedAt.toISOString(),
+                                type: 'show',
+                                show: {
+                                    title: showData.title,
+                                    year: showData.year,
+                                    runtime: showData.runtime,
+                                    ids: {
+                                        simkl: showData.ids?.simkl || 0,
+                                        slug: showData.ids?.slug || '',
+                                        tvdb: showData.ids?.tvdb,
+                                        imdb: showData.ids?.imdb,
+                                        tmdb: showData.ids?.tmdb
+                                    }
+                                },
+                                episode: {
+                                    title: finalEpisodeData.title || "",
+                                    season: finalEpisodeData.season,
+                                    episode: finalEpisodeData.episode,
+                                    runtime: finalEpisodeData.runtime,
+                                    ids: finalEpisodeData.ids || {}
+                                }
+                            };
+                        } catch (error) {
+                            console.warn('Error processing show item:', error, item);
+                            return null;
+                        }
+                    })
+                    .filter((item: SimklHistoryItem | null): item is SimklHistoryItem => item !== null);
+
+                items.push(...showItems);
+            }
+
+            if (items.length === 0) {
+                console.debug('No items found in date range', {
+                    start: startDateTime.toISOString(),
+                    end: endDateTime.toISOString()
+                });
+            }
+
+            return { items };
+        } catch (error) {
+            console.error('SIMKL API Error:', error);
+            throw error;
         }
     }
 
-    setTokens(accessToken: string, refreshToken: string | null = null, expiresIn: number | null = null) {
+    setTokens(accessToken: string, refreshToken: string | null = null, expiresIn: number | null = null): void {
         if (!accessToken) {
             throw new Error('Access token is required');
         }
         this.accessToken = accessToken;
-        // Only update refresh token if provided
         if (refreshToken) {
             this.refreshToken = refreshToken;
         }
-        // Only update expiration if provided
         if (expiresIn && expiresIn > 0) {
             this.tokenExpiresAt = Date.now() + (expiresIn * 1000);
         }
-        console.debug('Tokens set:', {
-            hasAccessToken: !!this.accessToken,
-            hasRefreshToken: !!this.refreshToken,
-            expiresAt: this.tokenExpiresAt
-        });
     }
 
-    getTokens() {
+    getTokens(): { accessToken: string | null; refreshToken: string | null; expiresAt: number | null; } {
         return {
             accessToken: this.accessToken,
             refreshToken: this.refreshToken,

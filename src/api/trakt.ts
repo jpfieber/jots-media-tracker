@@ -85,7 +85,6 @@ export class TraktAPI {
         };
 
         try {
-            console.debug('Exchanging code for token with params:', { ...params, client_secret: '[REDACTED]' });
             const response = await requestUrl({
                 url: TOKEN_URL,
                 method: 'POST',
@@ -152,11 +151,6 @@ export class TraktAPI {
             // If the token response includes created_at, use that for more accurate expiration
             this.tokenExpiresAt = (data.created_at + data.expires_in) * 1000;
         }
-        console.debug('Token data updated:', {
-            hasAccessToken: !!this.accessToken,
-            hasRefreshToken: !!this.refreshToken,
-            expiresAt: this.tokenExpiresAt
-        });
     }
 
     private async ensureValidToken() {
@@ -184,7 +178,6 @@ export class TraktAPI {
     async fetchViewingInfo(startDate: string, endDate: string): Promise<SimklResponse> {
         await this.ensureValidToken();
         const url = `${API_URL}/sync/history?start_at=${startDate}&end_at=${endDate}&extended=full`;
-        console.debug('Fetching viewing info:', { url, startDate, endDate });
 
         const response = await requestUrl({
             url,
@@ -203,49 +196,6 @@ export class TraktAPI {
 
         const data = response.json;
 
-        // Log detailed information about the first item to see all available fields
-        if (data && data.length > 0) {
-            console.debug('First history item details:', {
-                allFields: Object.keys(data[0]),
-                item: data[0],
-                episodeDetails: data[0].type === 'episode' ? {
-                    fields: Object.keys(data[0].episode),
-                    showFields: Object.keys(data[0].show),
-                    data: {
-                        episode: data[0].episode,
-                        show: data[0].show
-                    }
-                } : undefined,
-                movieDetails: data[0].type === 'movie' ? {
-                    fields: Object.keys(data[0].movie),
-                    data: data[0].movie
-                } : undefined
-            });
-        }
-
-        console.debug('Processed Trakt API Response:', {
-            status: response.status,
-            items: data.map((item: any) => ({
-                ...item,
-                episode: item.type === 'episode' ? {
-                    ...item.episode,
-                    runtime: item.episode.runtime,
-                    first_aired: item.episode.first_aired,
-                    comment_count: item.episode.comment_count
-                } : undefined,
-                movie: item.type === 'movie' ? {
-                    ...item.movie,
-                    runtime: item.movie.runtime,
-                    tagline: item.movie.tagline,
-                    overview: item.movie.overview
-                } : undefined,
-                show: item.type === 'episode' ? {
-                    ...item.show,
-                    runtime: item.show.runtime,
-                    status: item.show.status
-                } : undefined
-            }))
-        });
 
         // Ensure we have an array of items
         const historyItems = Array.isArray(data) ? data : [];
@@ -324,7 +274,7 @@ export class TraktAPI {
         }
     }
 
-    setTokens(accessToken: string, refreshToken: string | null = null, expiresIn: number | null = null) {
+    setTokens(accessToken: string, refreshToken: string | null = null, expiresIn: number | null = null): void {
         if (!accessToken) {
             throw new Error('Access token is required');
         }
@@ -335,14 +285,9 @@ export class TraktAPI {
         if (expiresIn && expiresIn > 0) {
             this.tokenExpiresAt = Date.now() + (expiresIn * 1000);
         }
-        console.debug('Tokens set:', {
-            hasAccessToken: !!this.accessToken,
-            hasRefreshToken: !!this.refreshToken,
-            expiresAt: this.tokenExpiresAt
-        });
     }
 
-    getTokens() {
+    getTokens(): { accessToken: string | null; refreshToken: string | null; expiresAt: number | null; } {
         return {
             accessToken: this.accessToken,
             refreshToken: this.refreshToken,

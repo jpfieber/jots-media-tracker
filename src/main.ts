@@ -140,7 +140,6 @@ export default class MediaTrackerPlugin extends Plugin {
             }
 
             new Notice(`Found ${viewingData.items.length} items watched yesterday`);
-            console.log('Views from yesterday:', { startDate, endDate });
             console.debug('Raw viewing data:', viewingData);
             viewingData.items.forEach((item: SimklHistoryItem) => {
                 console.debug('Processing item:', item);
