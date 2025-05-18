@@ -11,21 +11,24 @@ export default class MediaTrackerPlugin extends Plugin {
     private simklAPI?: SimklAPI;
     private traktAPI?: TraktAPI;
 
+    private handleAuthCallback = async (params: any) => {
+        // The auth code will be in params.code
+        if (params.code) {
+            // Dispatch custom event that our settings tab will listen for
+            const event = new CustomEvent('jots-media-tracker:auth-code', {
+                detail: { code: params.code }
+            });
+            window.dispatchEvent(event);
+        }
+    };
+
     async onload() {
         await this.loadSettings();
         const settings = this.settings.getSettings();
 
-        // Register our custom URI protocol
-        this.registerObsidianProtocolHandler("jots-media-tracker-auth-callback", async (params) => {
-            // The auth code will be in params.code
-            if (params.code) {
-                // Dispatch custom event that our settings tab will listen for
-                const event = new CustomEvent('jots-media-tracker:auth-code', {
-                    detail: { code: params.code }
-                });
-                window.dispatchEvent(event);
-            }
-        });
+        // Register our custom URI protocols
+        this.registerObsidianProtocolHandler("jots-media-tracker-auth-callback", this.handleAuthCallback.bind(this));
+        this.registerObsidianProtocolHandler("jots-media-tracker-simkl-callback", this.handleAuthCallback.bind(this));
 
         if (settings.simkl.enabled && settings.simkl.clientId && settings.simkl.clientSecret) {
             this.simklAPI = new SimklAPI(settings.simkl.clientId, settings.simkl.clientSecret);
@@ -59,18 +62,17 @@ export default class MediaTrackerPlugin extends Plugin {
         this.addSettingTab(new SettingsTab(this.app, this));
     }
 
-    private getYesterdayDateRange(): { startDate: string, endDate: string } {
+    private getDateRange(): { startDate: string, endDate: string } {
         const now = new Date();
-        const yesterday = new Date(now);
-        yesterday.setDate(now.getDate() - 1);
-
-        // Start of yesterday in local time
-        const start = new Date(yesterday);
-        start.setHours(0, 0, 0, 0);
-
-        // End of yesterday in local time
-        const end = new Date(yesterday);
+        const end = new Date(now);
         end.setHours(23, 59, 59, 999);
+
+        const start = new Date(now);
+        const settings = this.settings.getSettings();
+        // Extract number from format like '1day' or '7days'
+        const days = parseInt(settings.viewTimeSpan.match(/\d+/)?.[0] ?? '1');
+        start.setDate(now.getDate() - days);
+        start.setHours(0, 0, 0, 0);
 
         return {
             startDate: start.toISOString(),
@@ -127,7 +129,7 @@ export default class MediaTrackerPlugin extends Plugin {
     async trackViewing() {
         try {
             const api = await this.getActiveAPI();
-            const { startDate, endDate } = this.getYesterdayDateRange();
+            const { startDate, endDate } = this.getDateRange();
             console.debug('Fetching viewing info for range:', { startDate, endDate });
 
             const viewingData = await api.fetchViewingInfo(startDate, endDate);
@@ -139,16 +141,38 @@ export default class MediaTrackerPlugin extends Plugin {
 
             new Notice(`Found ${viewingData.items.length} items watched yesterday`);
             console.log('Views from yesterday:', { startDate, endDate });
+            console.debug('Raw viewing data:', viewingData);
             viewingData.items.forEach((item: SimklHistoryItem) => {
+                console.debug('Processing item:', item);
                 const endTime = new Date(item.watched_at).toLocaleString();
                 const startTime = item.started_at ? new Date(item.started_at).toLocaleString() : 'unknown';
+
+                const formatIds = (ids: any) => {
+                    if (!ids) {
+                        console.debug('No IDs found for item');
+                        return '';
+                    }
+                    console.debug('Formatting IDs:', ids);
+                    const formatted = [];
+                    if (ids.imdb) formatted.push(`IMDb: ${ids.imdb}`);
+                    if (ids.tmdb) formatted.push(`TMDb: ${ids.tmdb}`);
+                    if (ids.tvdb) formatted.push(`TVDB: ${ids.tvdb}`);
+                    return formatted.length > 0 ? ` [${formatted.join(', ')}]` : '';
+                };
+
                 if (item.type === 'movie' && item.movie) {
+                    console.debug('Movie IDs:', item.movie.ids);
                     const runtime = item.movie.runtime ? ` (${item.movie.runtime} mins)` : '';
-                    console.log(`Movie: ${item.movie.title}${item.movie.year ? ` (${item.movie.year})` : ''}${runtime} - Watched from ${startTime} to ${endTime}`);
+                    const ids = item.movie.ids ? formatIds(item.movie.ids) : '';
+                    console.log(`Movie: ${item.movie.title}${item.movie.year ? ` (${item.movie.year})` : ''}${runtime}${ids} - Watched from ${startTime} to ${endTime}`);
                 } else if (item.type === 'show' && item.show && item.episode) {
+                    console.debug('Show IDs:', item.show.ids);
+                    console.debug('Episode IDs:', item.episode.ids);
                     const runtime = item.episode.runtime || item.show.runtime;
                     const runtimeStr = runtime ? ` (${runtime} mins)` : '';
-                    console.log(`TV: ${item.show.title} - S${item.episode.season}E${item.episode.episode}${item.episode.title ? ` - ${item.episode.title}` : ''}${runtimeStr} - Watched from ${startTime} to ${endTime}`);
+                    const showIds = item.show.ids ? formatIds(item.show.ids) : '';
+                    const episodeIds = item.episode.ids ? formatIds(item.episode.ids) : '';
+                    console.log(`TV: ${item.show.title}${showIds} - S${item.episode.season}E${item.episode.episode}${item.episode.title ? ` - ${item.episode.title}` : ''}${episodeIds}${runtimeStr} - Watched from ${startTime} to ${endTime}`);
                 }
             });
         } catch (error) {

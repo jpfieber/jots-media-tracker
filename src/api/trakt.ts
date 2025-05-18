@@ -272,7 +272,9 @@ export class TraktAPI {
                                 runtime: item.movie.runtime,
                                 ids: {
                                     simkl: item.movie.ids.trakt,
-                                    slug: item.movie.ids.slug
+                                    slug: item.movie.ids.slug,
+                                    imdb: item.movie.ids.imdb,
+                                    tmdb: item.movie.ids.tmdb
                                 }
                             }
                         };
@@ -291,14 +293,22 @@ export class TraktAPI {
                                 runtime: item.show.runtime,
                                 ids: {
                                     simkl: item.show.ids.trakt,
-                                    slug: item.show.ids.slug
+                                    slug: item.show.ids.slug,
+                                    tvdb: item.show.ids.tvdb,
+                                    imdb: item.show.ids.imdb,
+                                    tmdb: item.show.ids.tmdb
                                 }
                             },
                             episode: {
                                 title: item.episode.title,
                                 season: item.episode.season,
                                 episode: item.episode.number,
-                                runtime: item.episode.runtime
+                                runtime: item.episode.runtime,
+                                ids: {
+                                    tvdb: item.episode.ids.tvdb,
+                                    imdb: item.episode.ids.imdb,
+                                    tmdb: item.episode.ids.tmdb
+                                }
                             }
                         };
                     } else {

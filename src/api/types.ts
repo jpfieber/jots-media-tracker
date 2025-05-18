@@ -7,14 +7,19 @@ export interface TokenResponse {
     created_at?: number;
 }
 
+export interface IDsObject {
+    simkl: number;
+    slug: string;
+    tvdb?: number;
+    imdb?: string;
+    tmdb?: number;
+}
+
 export interface SimklShow {
     title: string;
     year?: number;
     runtime?: number;
-    ids?: {
-        simkl: number;
-        slug: string;
-    };
+    ids: IDsObject;
 }
 
 export interface SimklEpisode {
@@ -22,16 +27,18 @@ export interface SimklEpisode {
     season: number;
     episode: number;
     runtime?: number;
+    ids?: {
+        tvdb?: number;
+        imdb?: string;
+        tmdb?: number;
+    };
 }
 
 export interface SimklMovie {
     title: string;
     year?: number;
     runtime?: number;
-    ids?: {
-        simkl: number;
-        slug: string;
-    };
+    ids: IDsObject;
 }
 
 export interface SimklHistoryItem {

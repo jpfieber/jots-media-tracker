@@ -12,12 +12,15 @@ interface APISettings {
     enabled: boolean;
 }
 
+export type ViewTimeSpan = '1day' | '3days' | '7days' | '14days' | '30days' | '90days';
+
 export interface PluginSettings {
     simkl: APISettings;
     trakt: APISettings;
     trackMovies: boolean;
     trackTVShows: boolean;
     primaryService: 'simkl' | 'trakt' | null;
+    viewTimeSpan: ViewTimeSpan;
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -39,7 +42,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     },
     trackMovies: true,
     trackTVShows: true,
-    primaryService: null
+    primaryService: null,
+    viewTimeSpan: '1day'
 };
 
 export class Settings {
@@ -126,6 +130,36 @@ export class SettingsTab extends PluginSettingTab {
 
         // Add content settings
         containerEl.createEl('h3', { text: 'Content Settings' });
+
+        new Setting(containerEl)
+            .setName('View Time Span')
+            .setDesc('How far back to fetch viewing history')
+            .addDropdown(dropdown => dropdown
+                .addOption('1day', 'Last 24 Hours')
+                .addOption('3days', 'Last 3 Days')
+                .addOption('7days', 'Last Week')
+                .addOption('14days', 'Last 2 Weeks')
+                .addOption('30days', 'Last Month')
+                .addOption('90days', 'Last 3 Months')
+                .setValue(settings.viewTimeSpan)
+                .onChange(async (value) => {
+                    // Type guard to ensure value is a valid ViewTimeSpan
+                    const isValidTimeSpan = (v: string): v is ViewTimeSpan =>
+                        ['1day', '3days', '7days', '14days', '30days', '90days'].includes(v);
+
+                    if (!isValidTimeSpan(value)) {
+                        console.error('Invalid time span value:', value);
+                        return;
+                    }
+
+                    const currentSettings = this.plugin.settings.getSettings();
+                    this.plugin.settings.setSettings({
+                        ...currentSettings,
+                        viewTimeSpan: value
+                    });
+                    await this.plugin.saveSettings();
+                }));
+
         new Setting(containerEl)
             .setName('Track Movies')
             .addToggle(toggle => toggle
@@ -203,69 +237,67 @@ export class SettingsTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        // Add authentication button if credentials are set
-        if (serviceSettings.clientId && serviceSettings.clientSecret) {
-            if (!serviceSettings.accessToken) {
-                section.createEl('p', {
-                    text: `Click the button below to authenticate with ${serviceName}.`
-                });
+        // Handle authentication state
+        if (serviceSettings.accessToken) {
+            section.createEl('p', {
+                text: `You are currently authenticated with ${serviceName}.`
+            });
 
-                new Setting(section)
-                    .setName('Authentication')
-                    .addButton(button => button
-                        .setButtonText(`Authenticate with ${serviceName}`)
-                        .onClick(async () => {
-                            try {
-                                // Get the auth URL and open it
-                                const api = serviceKey === 'simkl'
-                                    ? new SimklAPI(serviceSettings.clientId, serviceSettings.clientSecret)
-                                    : new TraktAPI(serviceSettings.clientId, serviceSettings.clientSecret);
-                                const authUrl = api.getAuthUrl();
-                                window.open(authUrl, '_blank');
+            new Setting(section)
+                .setName('Authentication')
+                .addButton(button => button
+                    .setButtonText('Re-authenticate')
+                    .onClick(async () => {
+                        const currentSettings = this.plugin.settings.getSettings();
+                        currentSettings[serviceKey].accessToken = '';
+                        currentSettings[serviceKey].refreshToken = '';
+                        currentSettings[serviceKey].tokenExpiresAt = null;
+                        this.plugin.settings.setSettings(currentSettings);
+                        await this.plugin.saveSettings();
+                        this.display();
+                    }));
+        } else if (serviceSettings.clientId && serviceSettings.clientSecret) {
+            section.createEl('p', {
+                text: `Click the button below to authenticate with ${serviceName}.`
+            });
 
-                                // Show a notice to tell the user what's happening
-                                new Notice('Waiting for authorization... Check your browser and complete the process.');
+            new Setting(section)
+                .setName('Authentication')
+                .addButton(button => button
+                    .setButtonText(`Authenticate with ${serviceName}`)
+                    .onClick(async () => {
+                        try {
+                            // Get the auth URL and open it
+                            const api = serviceKey === 'simkl'
+                                ? new SimklAPI(serviceSettings.clientId, serviceSettings.clientSecret)
+                                : new TraktAPI(serviceSettings.clientId, serviceSettings.clientSecret);
+                            const authUrl = api.getAuthUrl();
+                            window.open(authUrl, '_blank');
 
-                                // Create and show modal in case manual code entry is needed
-                                const modal = new AuthCodeModal(this.app, async (code) => {
-                                    await this.handleAuthCode(code, api, serviceKey, serviceName);
-                                });
-                                modal.open();
+                            // Show a notice to tell the user what's happening
+                            new Notice('Waiting for authorization... Check your browser and complete the process.');
 
-                                // Also listen for the auth code from the protocol handler
-                                type AuthCodeEvent = CustomEvent<{ code: string }>;
-                                const authHandler = async (event: AuthCodeEvent) => {
-                                    const code = event.detail.code;
-                                    await this.handleAuthCode(code, api, serviceKey, serviceName);
-                                    modal.close();
-                                    window.removeEventListener('jots-media-tracker:auth-code', authHandler as unknown as EventListener);
-                                };
+                            // Create and show modal in case manual code entry is needed
+                            const modal = new AuthCodeModal(this.app, async (code) => {
+                                await this.handleAuthCode(code, api, serviceKey, serviceName);
+                            });
+                            modal.open();
 
-                                window.addEventListener('jots-media-tracker:auth-code', authHandler as unknown as EventListener);
-                            } catch (error) {
-                                console.error('Authentication failed:', error);
-                                new Notice('Authentication failed. Please try again.');
-                            }
-                        }));
-            } else {
-                section.createEl('p', {
-                    text: `You are currently authenticated with ${serviceName}.`
-                });
+                            // Also listen for the auth code from the protocol handler
+                            type AuthCodeEvent = CustomEvent<{ code: string }>;
+                            const authHandler = async (event: AuthCodeEvent) => {
+                                const code = event.detail.code;
+                                await this.handleAuthCode(code, api, serviceKey, serviceName);
+                                modal.close();
+                                window.removeEventListener('jots-media-tracker:auth-code', authHandler as unknown as EventListener);
+                            };
 
-                new Setting(section)
-                    .setName('Authentication')
-                    .addButton(button => button
-                        .setButtonText('Re-authenticate')
-                        .onClick(async () => {
-                            const currentSettings = this.plugin.settings.getSettings();
-                            currentSettings[serviceKey].accessToken = '';
-                            currentSettings[serviceKey].refreshToken = '';
-                            currentSettings[serviceKey].tokenExpiresAt = null;
-                            this.plugin.settings.setSettings(currentSettings);
-                            await this.plugin.saveSettings();
-                            this.display();
-                        }));
-            }
+                            window.addEventListener('jots-media-tracker:auth-code', authHandler as unknown as EventListener);
+                        } catch (error) {
+                            console.error('Authentication failed:', error);
+                            new Notice('Authentication failed. Please try again.');
+                        }
+                    }));
         }
     }
 }

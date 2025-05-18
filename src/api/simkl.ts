@@ -1,10 +1,9 @@
-import { SimklResponse, SimklHistoryItem } from './types';
+import { requestUrl } from 'obsidian';
+import { SimklResponse, SimklHistoryItem, TokenResponse } from './types';
 
 const API_URL = 'https://api.simkl.com';
 const AUTH_URL = 'https://simkl.com/oauth/authorize';
 const TOKEN_URL = 'https://api.simkl.com/oauth/token';
-
-import { TokenResponse } from './types';
 
 export class SimklAPI {
     private clientId: string;
@@ -30,30 +29,57 @@ export class SimklAPI {
     }
 
     async exchangeCodeForToken(code: string): Promise<TokenResponse> {
-        const params = {
-            grant_type: 'authorization_code',
-            code,
-            client_id: this.clientId,
-            client_secret: this.clientSecret,
-            redirect_uri: 'obsidian://jots-media-tracker-auth-callback'
-        };
+        try {
+            // Log full request details for debugging
+            console.debug('Starting token exchange...');
 
-        const response = await fetch(TOKEN_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(params)
-        });
+            const requestBody = {
+                code: code,
+                client_id: this.clientId,
+                client_secret: this.clientSecret,
+                redirect_uri: 'obsidian://jots-media-tracker-auth-callback',
+                grant_type: 'authorization_code'
+            };
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Failed to exchange code for token: ${response.status}, details: ${errorText}`);
+            // Enhanced debug logging
+            console.debug('Token request details:', {
+                url: TOKEN_URL,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'simkl-api-key': this.clientId
+                },
+                body: { ...requestBody, client_secret: '[REDACTED]' }
+            });
+
+            const response = await requestUrl({
+                url: TOKEN_URL,
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'simkl-api-key': this.clientId,
+                    'User-Agent': 'Obsidian Media Tracker/1.0.0',
+                },
+                body: JSON.stringify(requestBody)
+            });
+
+            // Log full response for debugging
+            console.debug('Token response:', {
+                status: response.status,
+                headers: response.headers,
+                text: response.text
+            });
+
+            if (response.status !== 200) {
+                throw new Error(`Failed to exchange code for token: ${response.status}, details: ${response.text}`);
+            }
+
+            const responseData = response.json as TokenResponse;
+            this.setTokenData(responseData);
+            return responseData;
+        } catch (error) {
+            console.error('Token exchange failed:', error);
+            throw error;
         }
-
-        const data = await response.json() as TokenResponse;
-        this.setTokenData(data);
-        return data;
     }
 
     async refreshAccessToken(): Promise<TokenResponse> {
@@ -148,11 +174,23 @@ export class SimklAPI {
 
         if (!response.ok) {
             const errorText = await response.text();
+            console.error('SIMKL API Error Response:', {
+                status: response.status,
+                headers: response.headers,
+                body: errorText
+            });
             throw new Error(`HTTP error! status: ${response.status}, details: ${errorText}`);
         }
 
         const data = await response.json();
-        console.debug('SIMKL API Response:', data);
+        console.debug('SIMKL API Response Details:', {
+            rawResponse: data,
+            status: response.status,
+            headers: response.headers,
+            responseSize: JSON.stringify(data).length,
+            hasItems: Array.isArray(data) ? data.length : 0,
+            firstItem: Array.isArray(data) && data.length > 0 ? data[0] : null
+        });
 
         try {
             // Check if we got an array directly or if it's wrapped in a response object
@@ -165,13 +203,67 @@ export class SimklAPI {
                         throw new Error('Invalid item format: missing watched_at timestamp');
                     }
 
-                    return {
+                    // Extract runtime to calculate start time
+                    let runtime = 0;
+                    if (item.movie && item.movie.runtime) {
+                        runtime = item.movie.runtime;
+                    } else if (item.episode && item.episode.runtime) {
+                        runtime = item.episode.runtime;
+                    } else if (item.show && item.show.runtime) {
+                        runtime = item.show.runtime;
+                    }
+
+                    const watchedAt = new Date(item.watched_at);
+                    const startedAt = new Date(watchedAt.getTime() - runtime * 60 * 1000);
+
+                    const result: SimklHistoryItem = {
                         watched_at: item.watched_at,
-                        type: item.movie ? 'movie' : 'show',
-                        movie: item.movie,
-                        show: item.show,
-                        episode: item.episode
+                        started_at: startedAt.toISOString(),
+                        type: item.movie ? 'movie' : 'show'
                     };
+
+                    if (item.movie) {
+                        result.movie = {
+                            title: item.movie.title,
+                            year: item.movie.year,
+                            runtime: item.movie.runtime,
+                            ids: {
+                                simkl: item.movie.ids?.simkl || 0,
+                                slug: item.movie.ids?.slug || '',
+                                imdb: item.movie.ids?.imdb,
+                                tmdb: item.movie.ids?.tmdb
+                            }
+                        };
+                    } else if (item.show) {
+                        result.show = {
+                            title: item.show.title,
+                            year: item.show.year,
+                            runtime: item.show.runtime,
+                            ids: {
+                                simkl: item.show.ids?.simkl || 0,
+                                slug: item.show.ids?.slug || '',
+                                tvdb: item.show.ids?.tvdb,
+                                imdb: item.show.ids?.imdb,
+                                tmdb: item.show.ids?.tmdb
+                            }
+                        };
+
+                        if (item.episode) {
+                            result.episode = {
+                                title: item.episode.title,
+                                season: item.episode.season,
+                                episode: item.episode.number,
+                                runtime: item.episode.runtime,
+                                ids: {
+                                    tvdb: item.episode.ids?.tvdb,
+                                    imdb: item.episode.ids?.imdb,
+                                    tmdb: item.episode.ids?.tmdb
+                                }
+                            };
+                        }
+                    }
+
+                    return result;
                 })
             };
         } catch (error: unknown) {
