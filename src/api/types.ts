@@ -10,6 +10,7 @@ export interface TokenResponse {
 export interface SimklShow {
     title: string;
     year?: number;
+    runtime?: number;
     ids?: {
         simkl: number;
         slug: string;
@@ -20,11 +21,13 @@ export interface SimklEpisode {
     title?: string;
     season: number;
     episode: number;
+    runtime?: number;
 }
 
 export interface SimklMovie {
     title: string;
     year?: number;
+    runtime?: number;
     ids?: {
         simkl: number;
         slug: string;
@@ -32,7 +35,8 @@ export interface SimklMovie {
 }
 
 export interface SimklHistoryItem {
-    watched_at: string;  // ISO date string
+    watched_at: string;  // ISO date string (end time)
+    started_at?: string; // ISO date string (start time)
     show?: SimklShow;
     movie?: SimklMovie;
     episode?: SimklEpisode;

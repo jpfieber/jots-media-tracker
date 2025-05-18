@@ -9,6 +9,7 @@ interface TraktEpisode {
     season: number;
     number: number;
     title: string;
+    runtime?: number;
     ids: {
         trakt: number;
         tvdb?: number;
@@ -20,6 +21,7 @@ interface TraktEpisode {
 interface TraktShow {
     title: string;
     year: number;
+    runtime?: number;
     ids: {
         trakt: number;
         slug: string;
@@ -32,6 +34,7 @@ interface TraktShow {
 interface TraktMovie {
     title: string;
     year: number;
+    runtime?: number;
     ids: {
         trakt: number;
         slug: string;
@@ -60,7 +63,9 @@ export class TraktAPI {
     constructor(clientId: string, clientSecret: string) {
         this.clientId = clientId;
         this.clientSecret = clientSecret;
-    } getAuthUrl(): string {
+    }
+
+    getAuthUrl(): string {
         const params = new URLSearchParams({
             response_type: 'code',
             client_id: this.clientId,
@@ -68,7 +73,9 @@ export class TraktAPI {
             state: Math.random().toString(36).substring(7)
         });
         return `${AUTH_URL}?${params}`;
-    } async exchangeCodeForToken(code: string): Promise<TokenResponse> {
+    }
+
+    async exchangeCodeForToken(code: string): Promise<TokenResponse> {
         const params = {
             code,
             client_id: this.clientId,
@@ -96,7 +103,9 @@ export class TraktAPI {
             console.error('Token exchange failed:', error);
             throw new Error(error instanceof Error ? error.message : 'Failed to exchange code for token');
         }
-    } async refreshAccessToken(): Promise<TokenResponse> {
+    }
+
+    async refreshAccessToken(): Promise<TokenResponse> {
         if (!this.refreshToken) {
             throw new Error('No refresh token available');
         }
@@ -170,9 +179,11 @@ export class TraktAPI {
                 }
             }
         }
-    } async fetchViewingInfo(startDate: string, endDate: string): Promise<SimklResponse> {
+    }
+
+    async fetchViewingInfo(startDate: string, endDate: string): Promise<SimklResponse> {
         await this.ensureValidToken();
-        const url = `${API_URL}/sync/history?start_at=${startDate}&end_at=${endDate}`;
+        const url = `${API_URL}/sync/history?start_at=${startDate}&end_at=${endDate}&extended=full`;
         console.debug('Fetching viewing info:', { url, startDate, endDate });
 
         const response = await requestUrl({
@@ -188,54 +199,106 @@ export class TraktAPI {
 
         if (response.status !== 200) {
             throw new Error(`HTTP error! status: ${response.status}, details: ${response.text}`);
-        } const data = response.json;
-        console.debug('Trakt API Response:', {
+        }
+
+        const data = response.json;
+
+        // Log detailed information about the first item to see all available fields
+        if (data && data.length > 0) {
+            console.debug('First history item details:', {
+                allFields: Object.keys(data[0]),
+                item: data[0],
+                episodeDetails: data[0].type === 'episode' ? {
+                    fields: Object.keys(data[0].episode),
+                    showFields: Object.keys(data[0].show),
+                    data: {
+                        episode: data[0].episode,
+                        show: data[0].show
+                    }
+                } : undefined,
+                movieDetails: data[0].type === 'movie' ? {
+                    fields: Object.keys(data[0].movie),
+                    data: data[0].movie
+                } : undefined
+            });
+        }
+
+        console.debug('Processed Trakt API Response:', {
             status: response.status,
-            statusText: response.status,
-            data
+            items: data.map((item: any) => ({
+                ...item,
+                episode: item.type === 'episode' ? {
+                    ...item.episode,
+                    runtime: item.episode.runtime,
+                    first_aired: item.episode.first_aired,
+                    comment_count: item.episode.comment_count
+                } : undefined,
+                movie: item.type === 'movie' ? {
+                    ...item.movie,
+                    runtime: item.movie.runtime,
+                    tagline: item.movie.tagline,
+                    overview: item.movie.overview
+                } : undefined,
+                show: item.type === 'episode' ? {
+                    ...item.show,
+                    runtime: item.show.runtime,
+                    status: item.show.status
+                } : undefined
+            }))
         });
 
-        try {
-            // Ensure we have an array of items
-            const historyItems = Array.isArray(data) ? data : [];
+        // Ensure we have an array of items
+        const historyItems = Array.isArray(data) ? data : [];
 
+        try {
             // Convert Trakt format to SIMKL format for consistency
             return {
                 items: historyItems.map((item: TraktHistoryItem): SimklHistoryItem => {
                     if (!item.watched_at) {
                         console.warn('Item missing watched_at:', item);
                         throw new Error('Invalid item format: missing watched_at timestamp');
-                    }
+                    } if (item.type === 'movie' && item.movie) {
+                        const runtime = item.movie.runtime || 0;
+                        const watchedAt = new Date(item.watched_at);
+                        const startedAt = new Date(watchedAt.getTime() - runtime * 60 * 1000);
 
-                    if (item.type === 'movie' && item.movie) {
                         return {
                             watched_at: item.watched_at,
+                            started_at: startedAt.toISOString(),
                             type: 'movie',
                             movie: {
                                 title: item.movie.title,
                                 year: item.movie.year,
+                                runtime: item.movie.runtime,
                                 ids: {
-                                    simkl: item.movie.ids.trakt, // Using trakt ID as simkl ID
+                                    simkl: item.movie.ids.trakt,
                                     slug: item.movie.ids.slug
                                 }
                             }
                         };
                     } else if (item.type === 'episode' && item.show && item.episode) {
+                        const runtime = item.episode.runtime || item.show.runtime || 0;
+                        const watchedAt = new Date(item.watched_at);
+                        const startedAt = new Date(watchedAt.getTime() - runtime * 60 * 1000);
+
                         return {
                             watched_at: item.watched_at,
+                            started_at: startedAt.toISOString(),
                             type: 'show',
                             show: {
                                 title: item.show.title,
                                 year: item.show.year,
+                                runtime: item.show.runtime,
                                 ids: {
-                                    simkl: item.show.ids.trakt, // Using trakt ID as simkl ID
+                                    simkl: item.show.ids.trakt,
                                     slug: item.show.ids.slug
                                 }
                             },
                             episode: {
                                 title: item.episode.title,
                                 season: item.episode.season,
-                                episode: item.episode.number
+                                episode: item.episode.number,
+                                runtime: item.episode.runtime
                             }
                         };
                     } else {

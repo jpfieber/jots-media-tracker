@@ -140,11 +140,15 @@ export default class MediaTrackerPlugin extends Plugin {
             new Notice(`Found ${viewingData.items.length} items watched yesterday`);
             console.log('Views from yesterday:', { startDate, endDate });
             viewingData.items.forEach((item: SimklHistoryItem) => {
-                const watchedAt = new Date(item.watched_at).toLocaleString();
+                const endTime = new Date(item.watched_at).toLocaleString();
+                const startTime = item.started_at ? new Date(item.started_at).toLocaleString() : 'unknown';
                 if (item.type === 'movie' && item.movie) {
-                    console.log(`Movie: ${item.movie.title}${item.movie.year ? ` (${item.movie.year})` : ''} - Watched at ${watchedAt}`);
+                    const runtime = item.movie.runtime ? ` (${item.movie.runtime} mins)` : '';
+                    console.log(`Movie: ${item.movie.title}${item.movie.year ? ` (${item.movie.year})` : ''}${runtime} - Watched from ${startTime} to ${endTime}`);
                 } else if (item.type === 'show' && item.show && item.episode) {
-                    console.log(`TV: ${item.show.title} - S${item.episode.season}E${item.episode.episode}${item.episode.title ? ` - ${item.episode.title}` : ''} - Watched at ${watchedAt}`);
+                    const runtime = item.episode.runtime || item.show.runtime;
+                    const runtimeStr = runtime ? ` (${runtime} mins)` : '';
+                    console.log(`TV: ${item.show.title} - S${item.episode.season}E${item.episode.episode}${item.episode.title ? ` - ${item.episode.title}` : ''}${runtimeStr} - Watched from ${startTime} to ${endTime}`);
                 }
             });
         } catch (error) {
